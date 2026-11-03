@@ -47,15 +47,25 @@ if [[ $(azq role assignment list --assignee "$PRINCIPAL_ID" --role AcrPull --sco
 fi
 
 echo "== Building images in ACR"
-# after:  Azure.Core 1.60.0 + MSAL 4.91.1 (fails)   before: Azure.Core 1.54.0 + MSAL 4.84.0 (works)
-az acr build --registry "$ACR" --image repro:after --no-logs . --output none   --build-arg AZURE_CORE_VERSION=1.60.0 --build-arg MSAL_VERSION=4.91.1
-az acr build --registry "$ACR" --image repro:before --no-logs . --output none   --build-arg AZURE_CORE_VERSION=1.54.0 --build-arg MSAL_VERSION=4.84.0
+# after:  Azure.Core 1.60.0 + MSAL 4.91.1 (slow)   before: Azure.Core 1.54.0 + MSAL 4.84.0 (fast)
+# msal-4920: after, with only MSAL moved to 4.92.0, to check whether a newer MSAL still retries
+az acr build --registry "$ACR" --image repro:after --no-logs . --output none \
+  --build-arg AZURE_CORE_VERSION=1.60.0 --build-arg MSAL_VERSION=4.91.1
+az acr build --registry "$ACR" --image repro:before --no-logs . --output none \
+  --build-arg AZURE_CORE_VERSION=1.54.0 --build-arg MSAL_VERSION=4.84.0
+az acr build --registry "$ACR" --image repro:msal-4920 --no-logs . --output none \
+  --build-arg AZURE_CORE_VERSION=1.60.0 --build-arg MSAL_VERSION=4.92.0
 
 echo "== VNet with a subnet delegated to ACI"
-az network vnet create --resource-group "$RG" --name repro-vnet --address-prefixes 10.42.0.0/16 \
-  --subnet-name aci --subnet-prefixes 10.42.0.0/24 --output none
-az network vnet subnet update --resource-group "$RG" --vnet-name repro-vnet --name aci \
-  --delegations Microsoft.ContainerInstance/containerGroups --output none
+# Created only when missing: re-running vnet create would redefine the subnet without its delegation, which
+# Azure rejects once ACI has linked the subnet (SubnetMissingRequiredDelegation).
+if [[ -z $(azq network vnet list --resource-group "$RG" --query "[?name=='repro-vnet'].name") ]]; then
+  az network vnet create --resource-group "$RG" --name repro-vnet --address-prefixes 10.42.0.0/16 --output none
+fi
+if [[ -z $(azq network vnet subnet list --resource-group "$RG" --vnet-name repro-vnet --query "[?name=='aci'].name") ]]; then
+  az network vnet subnet create --resource-group "$RG" --vnet-name repro-vnet --name aci \
+    --address-prefixes 10.42.0.0/24 --delegations Microsoft.ContainerInstance/containerGroups --output none
+fi
 
 echo "== Waiting 60s for the AcrPull role assignment to propagate"
 sleep 60
@@ -95,6 +105,7 @@ run_case vnet-after          after  vnet   false
 run_case vnet-after-disabled after  vnet   true
 run_case vnet-before         before vnet   false
 run_case public-after        after  public false
+run_case vnet-msal-4920      msal-4920 vnet false
 
 echo
 echo "Full logs, including MSAL verbose output, are in logs-*.txt."

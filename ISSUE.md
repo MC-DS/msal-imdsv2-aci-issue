@@ -1,20 +1,20 @@
 **Repo:** Azure/azure-sdk-for-net (Azure.Core / Azure.Identity), cross-referenced on AzureAD/microsoft-authentication-library-for-dotnet
 
-**Title:** ManagedIdentityCredential takes ~48s in Azure Container Instances: 404s from MSAL capability-discovery probes are retried 5 times
+**Title:** ManagedIdentityCredential takes ~45–53s in Azure Container Instances: 404s from MSAL capability-discovery probes are retried 5 times
 
 ### Library name and version
 
-Azure.Identity 1.21.0 → Azure.Core 1.60.0, Microsoft.Identity.Client 4.91.1. Not affected: Azure.Core 1.54.0 + MSAL 4.84.0.
+Azure.Identity 1.21.0 → Azure.Core 1.60.0, Microsoft.Identity.Client 4.91.1 and 4.92.0. Not affected: Azure.Core 1.54.0 + MSAL 4.84.0.
 
 ### Describe the bug
 
-In a Linux Azure Container Instance with a user-assigned managed identity, the first `ManagedIdentityCredential.GetTokenAsync` takes about 48 seconds. MSAL's capability discovery sends two probes that ACI's IMDS answers with 404, and each is retried 5 times with exponential backoff by the Azure.Core pipeline:
+In a Linux Azure Container Instance with a user-assigned managed identity, the first `ManagedIdentityCredential.GetTokenAsync` takes 45–53 seconds. MSAL's capability discovery sends two probes that ACI's IMDS answers with 404, and each is sent 6 times (5 retries) with exponential backoff by the Azure.Core pipeline:
 
 | Request | ACI answers | Time |
 |---|---|---|
-| `GET /metadata/identity/getplatformmetadata?cred-api-version=2.0&client_id=…` | 404 `404 page not found`, 5 attempts | ~24s |
+| `GET /metadata/identity/getplatformmetadata?cred-api-version=2.0&client_id=…` | 404 `404 page not found`, 6 attempts | ~24s |
 | `GET /metadata/identity/oauth2/token?api-version=2018-02-01&client_id=…` (v1 probe) | 400 | ~0s |
-| `GET /metadata/instance/compute?api-version=2021-02-01` | 404, 5 attempts | ~24s |
+| `GET /metadata/instance/compute?api-version=2021-02-01` | 404, 6 attempts | ~24s |
 | v1 token request | 200 | <1s |
 
 Both 404s are definitive answers ("IMDSv2 not available", "no compute metadata on this host"), and MSAL treats them that way once the retries finish. Callers with a shorter timeout, such as Microsoft.Data.SqlClient with `Connect Timeout=30`, fail with `A task was canceled`.
@@ -35,10 +35,11 @@ A 404 from the IMDSv2 platform-metadata probe and from `/metadata/instance/compu
 | 1.60.0 / 4.91.1 | public IP | unset | 47,617 ms |
 | 1.60.0 / 4.91.1 | VNet | `true` | 811 ms |
 | 1.54.0 / 4.84.0 | VNet | unset | 651 ms |
+| 1.60.0 / 4.92.0 | VNet | unset | 52,738 ms |
 
 ### Reproduction steps
 
-https://github.com/MC-DS/msal-imdsv2-aci-issue: a console app, a Dockerfile, and `deploy.sh`, which runs all four cases in ACI with the az CLI and saves the verbose logs.
+https://github.com/MC-DS/msal-imdsv2-aci-issue: a console app, a Dockerfile, and `deploy.sh`, which runs all five cases in ACI with the az CLI and saves the verbose logs.
 
 ### Log excerpt (first probe; the compute probe repeats the same pattern)
 
