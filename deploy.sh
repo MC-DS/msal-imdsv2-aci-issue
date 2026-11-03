@@ -10,6 +10,13 @@
 
 set -euo pipefail
 
+# Git Bash on Windows rewrites arguments that look like Unix paths, which mangles resource IDs
+# (/subscriptions/...) passed to az.
+export MSYS_NO_PATHCONV=1
+
+# az on Windows ends tsv output with \r\n; strip the \r so captured values compare and pass cleanly.
+azq() { az "$@" --output tsv | tr -d '\r'; }
+
 RG="${RG:-msal-imdsv2-aci-repro}"
 LOCATION="${LOCATION:-australiaeast}"
 ACR="${ACR:-msalimdsrepro$RANDOM}"
@@ -25,17 +32,19 @@ echo "== Resource group, identity, registry"
 az group create --name "$RG" --location "$LOCATION" --output none
 
 az identity create --resource-group "$RG" --name repro-identity --output none
-IDENTITY_ID=$(az identity show --resource-group "$RG" --name repro-identity --query id --output tsv)
-CLIENT_ID=$(az identity show --resource-group "$RG" --name repro-identity --query clientId --output tsv)
-PRINCIPAL_ID=$(az identity show --resource-group "$RG" --name repro-identity --query principalId --output tsv)
+IDENTITY_ID=$(azq identity show --resource-group "$RG" --name repro-identity --query id)
+CLIENT_ID=$(azq identity show --resource-group "$RG" --name repro-identity --query clientId)
+PRINCIPAL_ID=$(azq identity show --resource-group "$RG" --name repro-identity --query principalId)
 
-ACR=$(az acr list --resource-group "$RG" --query "[0].name" --output tsv | grep . || echo "$ACR")
+ACR=$(azq acr list --resource-group "$RG" --query "[0].name" | grep . || echo "$ACR")
 az acr create --resource-group "$RG" --name "$ACR" --sku Basic --output none
-ACR_ID=$(az acr show --name "$ACR" --query id --output tsv)
-ACR_SERVER=$(az acr show --name "$ACR" --query loginServer --output tsv)
+ACR_ID=$(azq acr show --name "$ACR" --query id)
+ACR_SERVER=$(azq acr show --name "$ACR" --query loginServer)
 
-az role assignment create --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal \
-  --role AcrPull --scope "$ACR_ID" --output none 2>/dev/null || true
+if [[ $(azq role assignment list --assignee "$PRINCIPAL_ID" --role AcrPull --scope "$ACR_ID" --query "length(@)") == 0 ]]; then
+  az role assignment create --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal \
+    --role AcrPull --scope "$ACR_ID" --output none
+fi
 
 echo "== Building images in ACR"
 # after:  Azure.Core 1.60.0 + MSAL 4.91.1 (fails)   before: Azure.Core 1.54.0 + MSAL 4.84.0 (works)
@@ -60,6 +69,9 @@ run_case() {
   echo
   echo "################ $name: image $tag, $network, MSAL_MI_DISABLE_IMDS_V2=$disable_v2"
 
+  # A VNet container group can't be updated in place, so a rerun replaces it.
+  az container delete --resource-group "$RG" --name "$name" --yes --output none 2>/dev/null || true
+
   az container create --resource-group "$RG" --name "$name" --os-type Linux --cpu 1 --memory 1.5 \
     --image "$ACR_SERVER/repro:$tag" \
     --registry-login-server "$ACR_SERVER" --acr-identity "$IDENTITY_ID" \
@@ -69,8 +81,8 @@ run_case() {
     "${network_args[@]}" --output none
 
   for _ in $(seq 1 60); do
-    state=$(az container show --resource-group "$RG" --name "$name" \
-      --query "containers[0].instanceView.currentState.state" --output tsv 2>/dev/null || true)
+    state=$(azq container show --resource-group "$RG" --name "$name" \
+      --query "containers[0].instanceView.currentState.state" 2>/dev/null || true)
     [[ "$state" == "Terminated" ]] && break
     sleep 5
   done
