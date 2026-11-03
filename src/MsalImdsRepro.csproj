@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Defaults are the failing stack. The working stack is -p:AzureCoreVersion=1.54.0 -p:MsalVersion=4.84.0 -->
+    <AzureCoreVersion Condition="'$(AzureCoreVersion)' == ''">1.60.0</AzureCoreVersion>
+    <MsalVersion Condition="'$(MsalVersion)' == ''">4.91.1</MsalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Azure.Identity 1.21.0 forwards ManagedIdentityCredential to Azure.Core, which implements it on MSAL. -->
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Azure.Core" Version="$(AzureCoreVersion)" />
+    <PackageReference Include="Microsoft.Identity.Client" Version="$(MsalVersion)" />
+  </ItemGroup>
+
+</Project>
